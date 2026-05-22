@@ -1,23 +1,19 @@
 -- Statement module for challenge C0001 "Nat add zero".
 --
--- This file is owned by the ProofGarden operator. The user-submitted file
--- imports this module and proves the theorem in its own `solution`
--- declaration:
+-- Operator-owned. The auto-generated submission file looks like:
 --
 --   import ProofGarden.Challenges.C0001.Statement
+--   import Mathlib
 --
---   namespace ProofGarden.Challenges.C0001
+--   namespace ProofGarden.Challenges.C0001.Submissions.S_<id>
+--   -- USER BODY (defines `answer : ∀ (n : Nat), n + 0 = n`)
+--   def solution_target : ∀ (n : Nat), n + 0 = n := answer
+--   #print axioms solution_target
+--   end ...
 --
---   theorem solution (n : Nat) : n + 0 = n := by
---     <user proof body>
---
---   #print axioms solution
---
---   end ProofGarden.Challenges.C0001
---
--- Statement.lean does not need to define the theorem itself — `Nat.add_zero`
--- is already in core. We keep this file so the user-generated file always
--- has a stable import to anchor the challenge namespace.
+-- Statement.lean is intentionally minimal — Nat.add_zero is already in core.
+-- We keep it so the user-generated file always has a stable import to anchor
+-- the challenge namespace.
 
 namespace ProofGarden.Challenges.C0001
 

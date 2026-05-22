@@ -2,3 +2,4 @@
 -- from here. Add new challenges below.
 
 import ProofGarden.Challenges.C0001.Statement
+import ProofGarden.Challenges.C0002.Statement
