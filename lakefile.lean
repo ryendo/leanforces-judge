@@ -6,11 +6,11 @@ open Lake DSL
 -- and CI doesn't have to compile Mathlib from source.
 require "leanprover-community" / "mathlib" @ git "v4.13.0"
 
-package proofgarden where
+package leanforces where
   -- Lake configuration for the judge repo. Operator-owned.
   --
   -- The web app never commits to this repo by hand. It pushes auto-generated
-  -- files into `ProofGarden/Challenges/<slug>/Submissions/Submission_<id>.lean`
+  -- files into `Leanforces/Challenges/<slug>/Submissions/Submission_<id>.lean`
   -- on a `submission/<id>` branch. GitHub Actions then does a TARGETED
   -- `lake build <Module>` so we don't recompile every submission on every run.
   leanOptions := #[
@@ -19,7 +19,7 @@ package proofgarden where
   ]
 
 @[default_target]
-lean_lib ProofGarden where
-  -- Build everything under ProofGarden/, including auto-generated
+lean_lib Leanforces where
+  -- Build everything under Leanforces/, including auto-generated
   -- Submission_*.lean files. Per-file targeted builds happen in CI.
-  roots := #[`ProofGarden]
+  roots := #[`Leanforces]

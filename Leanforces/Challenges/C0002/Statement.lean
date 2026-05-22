@@ -3,8 +3,8 @@
 -- Operator-owned. The auto-generated submission file imports Mathlib
 -- (the whole library) and is wrapped in a per-submission namespace.
 
-namespace ProofGarden.Challenges.C0002
+namespace Leanforces.Challenges.C0002
 
 -- Intentionally empty; Mathlib's CommRing + ring tactic are enough.
 
-end ProofGarden.Challenges.C0002
+end Leanforces.Challenges.C0002

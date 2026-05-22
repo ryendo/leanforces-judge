@@ -2,10 +2,10 @@
 --
 -- Operator-owned. The auto-generated submission file looks like:
 --
---   import ProofGarden.Challenges.C0001.Statement
+--   import Leanforces.Challenges.C0001.Statement
 --   import Mathlib
 --
---   namespace ProofGarden.Challenges.C0001.Submissions.S_<id>
+--   namespace Leanforces.Challenges.C0001.Submissions.S_<id>
 --   -- USER BODY (defines `answer : ∀ (n : Nat), n + 0 = n`)
 --   def solution_target : ∀ (n : Nat), n + 0 = n := answer
 --   #print axioms solution_target
@@ -15,8 +15,8 @@
 -- We keep it so the user-generated file always has a stable import to anchor
 -- the challenge namespace.
 
-namespace ProofGarden.Challenges.C0001
+namespace Leanforces.Challenges.C0001
 
 -- (intentionally empty — core Nat is enough for this challenge)
 
-end ProofGarden.Challenges.C0001
+end Leanforces.Challenges.C0001

@@ -11,5 +11,5 @@
    "inputRev": "v4.13.0",
    "inherited": false,
    "configFile": "lakefile.lean"}],
- "name": "proofgarden",
+ "name": "leanforces",
  "lakeDir": ".lake"}
