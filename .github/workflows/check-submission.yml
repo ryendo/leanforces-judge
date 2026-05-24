@@ -249,10 +249,135 @@ jobs:
           fi
           echo "✓ all used axioms are whitelisted."
 
-      # Surface the raw axiom line as an artifact so the web app's
-      # webhook handler can fetch + record it on the submission row
-      # without re-downloading the full build log.
-      - name: Upload axiom artifact
+      # ── Machine-readable axiom report (2026-05) ──────────────
+      # Emit `.judge-out/axioms-report.json` — a structured record
+      # the web app's webhook handler can fetch via the artifact
+      # API instead of scraping the GitHub Actions text log
+      # (which proved unreliable on workerd: log fetches sometimes
+      # returned empty bodies + bash-script comments matching the
+      # regex confused the parser).
+      #
+      # Schema (matches `lib/axiom-report.ts` on the server):
+      #
+      #   {
+      #     "schemaVersion":      1,
+      #     "submission_id":      string,   // from commit message
+      #     "challenge_slug":     string | null,
+      #     "commit_sha":         string,   // GITHUB_SHA, verified
+      #                                     //   server-side against
+      #                                     //   the recorded SHA
+      #     "lean_version":       string,   // from lean-toolchain
+      #     "mathlib_version":    string | null,
+      #     "target":             "solution_target",
+      #     "status":             "ok" | "parse_error" | "lean_error",
+      #     "axioms":             string[], // parsed names
+      #     "raw_axiom_output":   string,   // full multi-line text
+      #     "generated_at":       ISO 8601 string,
+      #     "workflow_run_id":    string    // GITHUB_RUN_ID
+      #   }
+      #
+      # status="ok"          → axioms parsed cleanly (zero axioms
+      #                          is the empty array, NOT parse_error)
+      # status="parse_error" → axiom block found but couldn't parse
+      #                          a clean list (server treats this
+      #                          as an infrastructure error, not a
+      #                          proof failure — the UI says so).
+      # status="lean_error"  → axiom block was absent entirely
+      #                          (lake failed before #print axioms
+      #                          fired). The workflow itself would
+      #                          have exited non-zero in that case
+      #                          so the webhook wouldn't try to
+      #                          accept; we emit the report anyway
+      #                          for completeness.
+      - name: Build axioms-report.json
+        if: always()
+        env:
+          GH_SHA: ${{ github.sha }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -eo pipefail
+          mkdir -p .judge-out
+          # Pull submission_id + challenge_slug out of the commit
+          # message (the web app embeds them in a stable format).
+          MSG=$(git log -1 --pretty=%B)
+          SUB_ID=$(echo "$MSG" | grep -oE 'Submission [A-Za-z0-9_-]+' | head -1 | awk '{print $2}' || echo "")
+          CH_SLUG=$(echo "$MSG" | grep -oE 'for [a-z0-9][a-z0-9-]+' | head -1 | awk '{print $2}' || echo "")
+          LEAN_TC=$(cat lean-toolchain 2>/dev/null | tr -d '\n' || echo "")
+          MATHLIB_VER=$(jq -r '.packages[]? | select(.name=="mathlib") | (.rev // .version // "")' lake-manifest.json 2>/dev/null | head -1 || echo "")
+          AX_BLOCK=$(cat .judge-out/axioms.txt 2>/dev/null || echo "")
+          # Decide status + parse the axiom list.
+          STATUS="ok"
+          PARSED_JSON="[]"
+          if [ -z "$AX_BLOCK" ]; then
+            STATUS="lean_error"
+          elif echo "$AX_BLOCK" | grep -qi "does not depend on any axioms"; then
+            STATUS="ok"
+            PARSED_JSON="[]"
+          else
+            # Strip the header + brackets, split on commas/newlines,
+            # filter for valid Lean identifiers.
+            USED=$(echo "$AX_BLOCK" | sed -E "s/.*depends on axioms[: ]+//" \
+                     | tr -d '[]' \
+                     | tr ',' '\n' \
+                     | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
+                     | grep -E "^[A-Za-z_][A-Za-z0-9_.]*$" || true)
+            if [ -z "$USED" ]; then
+              STATUS="parse_error"
+              PARSED_JSON="[]"
+            else
+              PARSED_JSON=$(echo "$USED" | jq -R . | jq -s .)
+            fi
+          fi
+          # Use jq to compose so quoting / escaping is safe even
+          # when the raw output contains newlines / quotes / unicode.
+          jq -n \
+            --arg sub_id      "$SUB_ID" \
+            --arg ch_slug     "$CH_SLUG" \
+            --arg commit      "$GH_SHA" \
+            --arg lean        "$LEAN_TC" \
+            --arg mathlib     "$MATHLIB_VER" \
+            --arg status      "$STATUS" \
+            --argjson axioms  "$PARSED_JSON" \
+            --arg raw         "$AX_BLOCK" \
+            --arg generated   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg run_id      "$GH_RUN_ID" \
+            '{
+              schemaVersion: 1,
+              submission_id: $sub_id,
+              challenge_slug: ($ch_slug | select(length > 0)),
+              commit_sha: $commit,
+              lean_version: $lean,
+              mathlib_version: ($mathlib | select(length > 0)),
+              target: "solution_target",
+              status: $status,
+              axioms: $axioms,
+              raw_axiom_output: $raw,
+              generated_at: $generated,
+              workflow_run_id: $run_id
+             }' > .judge-out/axioms-report.json
+          echo "── axioms-report.json ──"
+          cat .judge-out/axioms-report.json
+
+      # Upload the structured report as a GitHub Actions artifact.
+      # IMPORTANT: compression-level=0 (STORE only, no deflate) so
+      # the webhook's minimal zip reader on workerd doesn't need
+      # to decompress — STORE is just the file's bytes appended
+      # after the local file header. Saves a ~80-line deflate
+      # implementation in the workerd-side fetcher.
+      - name: Upload axioms-report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axiom-report
+          path: .judge-out/axioms-report.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      # Retain the legacy single-line `axioms` artifact too for
+      # one toolchain cycle — lets a webhook running pre-2026-05
+      # code still find SOMETHING if we have to roll back.
+      - name: Upload legacy axiom artifact (compat)
         if: always()
         uses: actions/upload-artifact@v4
         with:
