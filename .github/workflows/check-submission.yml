@@ -115,7 +115,13 @@ jobs:
       - name: Build (targeted) + capture axiom output
         id: build
         run: |
-          set -e
+          # `set -o pipefail` is CRITICAL: without it, `lake build | tee`
+          # exits with tee's exit code (always 0) instead of lake's, so
+          # a `lake build` that fails (sorryAx warnings → exit 1, type
+          # errors, etc.) gets silently swallowed and downstream steps
+          # incorrectly think the build succeeded. Combined with `set -e`
+          # this makes the step fail iff lake fails.
+          set -eo pipefail
           mkdir -p .judge-out
           if [ -n "${{ steps.find.outputs.module }}" ]; then
             echo "lake build ${{ steps.find.outputs.module }}"
@@ -124,14 +130,49 @@ jobs:
             echo "lake build (full)"
             lake build 2>&1 | tee .judge-out/build.log
           fi
-          # Extract the `#print axioms solution_target` line. Lean
-          # prints either:
+          # Extract the `#print axioms solution_target` block. Lean
+          # prints one of:
+          #
           #   'solution_target' does not depend on any axioms
+          #
           #   'solution_target' depends on axioms: a, b, c
-          # We persist whatever line matched (or the empty string).
-          grep -E "(does not depend on any axioms|depends on axioms)" \
-               .judge-out/build.log > .judge-out/axioms.txt || true
-          echo "axioms_raw=$(cat .judge-out/axioms.txt | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          #
+          #   'solution_target' depends on axioms: [propext,
+          #    sorryAx,
+          #    Classical.choice,
+          #    Quot.sound]
+          #
+          # Lean 4.13+ wraps lists of ≥4 axioms onto subsequent lines.
+          # The previous `grep` extractor only captured the FIRST line
+          # of the multi-line form, which left `sorryAx` (and anything
+          # else after the wrap) invisible to the enforce step below.
+          # An `awk` state machine captures the entire block — header
+          # line through closing `]` — so the multi-line case is now
+          # parsed identically to the single-line case.
+          awk '
+            /does not depend on any axioms/ {
+              print
+              in_block = 0
+              next
+            }
+            /depends on axioms/ {
+              print
+              if (index($0, "]") > 0) {
+                in_block = 0
+              } else {
+                in_block = 1
+              }
+              next
+            }
+            in_block {
+              print
+              if (index($0, "]") > 0) { in_block = 0 }
+            }
+          ' .judge-out/build.log > .judge-out/axioms.txt || true
+          # axioms_raw is used by downstream steps that need it on a
+          # single line. We join with a literal " | " separator so the
+          # multi-line structure stays inspectable in the log.
+          echo "axioms_raw=$(tr '\n' ' ' < .judge-out/axioms.txt)" >> "$GITHUB_OUTPUT"
 
       # ── Axiom-whitelist enforcement ──────────────────────────
       # The web app embeds `axiom_whitelist=<csv>` into the commit
@@ -144,22 +185,45 @@ jobs:
       # failed, with the violation list in `judgeLog`.
       - name: Enforce axiom whitelist
         run: |
-          set -e
+          set -eo pipefail
           MSG=$(git log -1 --pretty=%B)
           WHITELIST=$(echo "$MSG" | grep -oE 'axiom_whitelist=[A-Za-z0-9_.,\-]+' | head -1 | cut -d= -f2 || true)
           if [ -z "$WHITELIST" ]; then
             echo "::warning::No axiom_whitelist in commit message — skipping enforcement (legacy submission)."
             exit 0
           fi
-          AX_LINE=$(cat .judge-out/axioms.txt || true)
-          if echo "$AX_LINE" | grep -qi "does not depend on any axioms"; then
+          AX_BLOCK=$(cat .judge-out/axioms.txt || true)
+          if echo "$AX_BLOCK" | grep -qi "does not depend on any axioms"; then
             echo "✓ proof uses zero axioms — within whitelist by definition."
             exit 0
           fi
-          # Lean 4.13+ formats the list as `[a, b, c]`. Older Lean
-          # outputs `a, b, c` without brackets. `tr -d '[]'` handles
-          # both: it strips brackets if present, no-op if not.
-          USED=$(echo "$AX_LINE" | sed -E "s/.*depends on axioms[: ]+//" \
+          # HARD SECURITY GATE: sorryAx is Lean's witness for `sorry`
+          # / `admit` / any partial / failed-elaboration term. A user
+          # can hit it without typing the word `sorry` simply by
+          # leaving a tactic block incomplete (e.g. `by ring` on a
+          # non-equality goal). The static text filter cannot catch
+          # this case; only the `#print axioms` semantic report does.
+          # Hard-reject regardless of whitelist content, even if the
+          # operator accidentally included sorryAx in the whitelist.
+          if echo "$AX_BLOCK" | grep -qE '(^|[^A-Za-z0-9_.])(Lean\.)?sorryAx([^A-Za-z0-9_.]|$)'; then
+            echo "::error::sorryAx detected in #print axioms output."
+            echo "  This proof depends on Lean's sorryAx (the witness for"
+            echo "  \`sorry\` / \`admit\` / failed-tactic fallback). TheoremForces"
+            echo "  hard-rejects sorryAx regardless of the per-challenge"
+            echo "  whitelist."
+            echo "  axiom block:"
+            echo "$AX_BLOCK" | sed 's/^/    /'
+            exit 1
+          fi
+          # The axioms block is now reliably MULTI-LINE for wrapped
+          # lists (the build step uses awk to slurp from the header
+          # line through the closing `]`). The pipeline below tokenises
+          # the whole block per-line, so each axiom on its own
+          # continuation line ends up in $USED. Previously the build
+          # step extracted only the header line and the rest were
+          # silently dropped — a sorryAx after the wrap could pass
+          # whitelist enforcement undetected.
+          USED=$(echo "$AX_BLOCK" | sed -E "s/.*depends on axioms[: ]+//" \
                    | tr -d '[]' \
                    | tr ',' '\n' \
                    | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
@@ -179,6 +243,8 @@ jobs:
           if [ -n "$VIOLATIONS" ]; then
             echo "::error::Axiom-whitelist violation — proof uses unwhitelisted axioms:$VIOLATIONS"
             echo "  whitelist: $(tr '\n' ',' < .judge-out/allowed.txt)"
+            echo "  parsed axioms (one per line):"
+            echo "$USED" | sed 's/^/    /'
             exit 1
           fi
           echo "✓ all used axioms are whitelisted."
